@@ -1,0 +1,41 @@
+\documentclass{article}
+
+% Language setting
+% Replace `english' with e.g. `spanish' to change the document language
+\usepackage[english]{babel}
+
+% Set page size and margins
+% Replace `letterpaper' with `a4paper' for UK/EU standard size
+\usepackage[letterpaper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+% Useful packages
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+\title{Analyzing Frequent Changes in Open Source Codebases and Their Causes}
+
+\begin{document}
+\maketitle
+
+\section{Related Work}
+
+Understanding the mechanisms and factors influencing software changes is critical for improving software maintenance and evolution. While studies such as those by \cite{buckley2005towards} and \cite{mens2003towards} have provided broad frameworks and tools for understanding and categorizing software changes, our research focuses on a specific aspect of software evolution: identifying files and file lines in configuration management history that have an extraordinarily large number of changes or bug fixes.
+
+\subsection{Patterns of Code Changes}
+
+Studies have been conducted to understand the patterns of code changes in general. These patterns are crucial for distinguishing between different types of changes such as new feature additions, bug fixes, and code refactoring. For instance, \cite{trautsch2023really} identifies that quality-improving commits tend to be smaller than non-quality improving ones. Perfective changes positively reduce complexity and improve code quality, while corrective changes tend to increase size and complexity. Understanding the size and nature of commits can help in assessing whether high file changes are more about bug fixes or feature additions.
+
+\subsection{Bug Fixing and Change Impact Analysis}
+
+The study by \cite{ufuktepe2021relation} offers valuable insights into bug fix change patterns and their impact on software components. Using a tool developed for comparing code versions, they have identified that the most common bug fixes include new method declarations and modifying method bodies. Their change impact analysis indicates that bug fix changes typically have a low impact on the overall software, with an impact rate ranging from 0.4\% to 5\%. Meanwhile, \cite{islam2021changes} identified four new bug fixing patterns related to constructors, try-catch, and enum code constructs, reporting that the most dominant categories hosting bug-fixing edits are method calls, method declarations, local variables, if-related, assignment, and return. The least dominant categories are try, switch, catch, and enum. Additionally, \cite{nguyen2013study} suggests that repetitiveness, the ratio of repeated changes over total changes, could be as high as 70-100\% at small sizes and decreases exponentially as size increases. \cite{palomba2017exploratory} indicates that classes experiencing a higher number of bug fix changes are more subject to operations that improve their maintainability, while classes where a higher number of new features are added are more prone to refactoring changes. The reasons behind such refactoring changes fall into the presence of duplicate codes or of previously self-admitted technical debts. In addition to this, general maintenance modifications lead to refactoring leading to an overall improvement of the readability of the source code.
+
+\subsection{Tools and Techniques for Change Detection}
+
+Various tools and techniques have been developed to aid in the detection and analysis of software changes. Version control tools and automated tooling are essential for tracking changes and understanding their impacts. Taxonomies and classifications, such as those proposed by \cite{mens2003towards} ,\cite{lehnert2012taxonomy}, help in systematically categorizing changes and understanding their implications. These tools and techniques are crucial for our research as they provide the foundation for analyzing files and lines with an extraordinarily large number of changes or bug fixes. 
+\cite{fluri2008discovering} describe a semi-automated approach to discover patterns of code change types using agglomerative hierarchical clustering. \cite{weissgerber2006identifying} presented an approach of ranking code changes as refactoring changes by combining signature-based analysis and clone-detection. 
+
+\bibliographystyle{ieeetr}
+\bibliography{ref}
+
+\end{document}
