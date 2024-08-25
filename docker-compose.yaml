@@ -1,9 +1,9 @@
-version: '3.8'
+version: '3.9'
 
 services:
   web:
     image: nginx:1.21.6
-    version: 3.8
+    version: '3.9'
     container_name: web_server
     ports:
       - "80:80"
@@ -16,9 +16,9 @@ services:
     image: postgres:14.2
     container_name: db_server
     environment:
-      POSTGRES_DB: mydatabase
+      POSTGRES_DB: changedbname
       POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
+      POSTGRES_PASSWORD: newpassword
     ports:
       - "5432:5432"
     volumes:
@@ -37,7 +37,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.16.238.0/24
+        - subnet: 172.16.239.0/24
   dbnet:
     driver: bridge
     ipam:
