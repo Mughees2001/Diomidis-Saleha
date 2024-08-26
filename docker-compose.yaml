@@ -12,20 +12,6 @@ services:
     networks:
       - webnet
 
-  db:
-    image: postgres:14.2
-    container_name: db_server
-    environment:
-      POSTGRES_DB: changeddbname2ndtime
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: changing2ndtime
-    ports:
-      - "5432:5432"
-    volumes:
-      - db_data:/var/lib/postgresql/data
-    networks:
-      - dbnet
-
 volumes:
   db_data:
     driver: local
