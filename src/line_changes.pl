@@ -99,6 +99,7 @@ debug_option
 	return ($opt_D =~ m/$opt/);
 }
 
+my $previous_was_deletion = 0;
 # Reconstruct the repository contents from its log -D R
 my $debug_reconstruction = debug_option('R');
 # Show results of splicing operations -D S
@@ -325,7 +326,7 @@ for (;;) {
 		my $binary = exists($binary{$old});
 		my $output_source_code = output_source_code($old);
 		for (my $i = $old_start; $i < $old_end; $i++) {
-			process_line_change($old, $i, substr($_, 1));
+			$previous_was_deletion = 1;
 			if ($binary) {
 				$_ = <>;
 				next;
@@ -359,7 +360,10 @@ for (;;) {
 		$_ = <> if (defined($_) && $_ =~ m/^\\ No newline at end of file/);
 		my @add;
 		for (my $i = $new_start; $i < $new_end; $i++) {
-			process_line_change($new, $i, substr($_, 1));
+			if ($previous_was_deletion) {
+                    process_line_change($new, $i, substr($_, 1));  # Process addition after deletion
+                }
+                $previous_was_deletion = 0;			
 			if ($debug_reconstruction) {
 				push(@add, $_);
 			} elsif ($opt_l) {
@@ -440,12 +444,13 @@ process_last_commit
 sub process_line_change {
     my ($file, $line_number, $content) = @_;
     my $key = "$file:$line_number";
-    if (exists $line_modifications{$key}) {
+    if (exists $line_modifications{$key} && $previous_was_deletion) {
         $line_modifications{$key}{count} += 1;
-        $line_modifications{$key}{content} = $content;  # last content seen
-    } else {
+        $line_modifications{$key}{content} = $content; 
+    } elsif (!exists $line_modifications{$key}) {
         $line_modifications{$key} = { count => 1, content => $content };
     }
+    $previous_was_deletion = 0;
 }
 
 # Reconstruct the state of the Git tree based on the log
