@@ -386,6 +386,10 @@ for (;;) {
 		}
 		$added_lines += $add_len;
 		$removed_lines += $remove_len;
+		 my $file_to_adjust = $new;  # Assuming $new is the filename after potential renaming
+    my $start_line_of_changes = $old_start;  # Start line of the hunk
+    my $delta_lines = $added_lines - $removed_lines;  # Ne
+    adjust_line_numbers($file_to_adjust, $start_line_of_changes, $delta_lines);
 		print "after nref=$#$nref\n" if ($debug_splice);
 		$_ = <> if (defined($_) && $_ =~ m/^\\ No newline at end of file/);
 		if (!defined($_)) {
@@ -451,6 +455,31 @@ sub process_line_change {
         $line_modifications{$key} = { count => 1, content => $content };
     }
     $previous_was_deletion = 0;
+}
+
+sub adjust_line_numbers {
+    my ($file, $start_line, $delta) = @_;
+    my %new_modifications;
+
+    foreach my $key (keys %line_modifications) {
+        my ($mod_file, $line_number) = split(/:/, $key);
+        if ($mod_file eq $file) {
+            if ($line_number >= $start_line) {
+                my $new_line_number = $line_number + $delta;
+                my $new_key = "$file:$new_line_number";
+                $new_modifications{$new_key} = {
+                    count => $line_modifications{$key}{count},
+                    content => $line_modifications{$key}{content},
+                };
+            } else {
+                $new_modifications{$key} = $line_modifications{$key};
+            }
+        } else {
+            $new_modifications{$key} = $line_modifications{$key};
+        }
+    }
+
+    %line_modifications = %new_modifications;
 }
 
 # Reconstruct the state of the Git tree based on the log
