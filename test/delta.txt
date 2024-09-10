@@ -1,13 +1,16 @@
+b
+z
+y
+x
   a6
-  g1
-  c5
-a1
-bb2
   f2
   j3
   h2
   l1
   j2
+i
+r
+s
   n4
   l2
   p1
