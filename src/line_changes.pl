@@ -1,24 +1,3 @@
-#!/usr/bin/perl
-#
-# Copyright 1996-2000 Diomidis Spinellis
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-#
-# Parse the output of
-# git log -M -m --pretty=tformat:'commit %H %ct' --topo-order --reverse -U0
-# to track the lifetime of individual lines
-#
 
 use strict;
 use warnings;
@@ -29,7 +8,6 @@ use Text::CSV;
 
 $main::VERSION = '0.1';
 
-# Exit after command processing error
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 my $csv = Text::CSV->new({ binary => 1, auto_diag => 1, eol => "\n" });
 open my $fh, ">:encoding(utf8)", "line_modifications.csv" or die "line_modifications.csv: $!";
@@ -308,6 +286,7 @@ for (;;) {
 			}
 		}
 	} elsif ($state eq 'range') {
+		
 		# Ranges within files
 		print "$_\n" if ($debug_range_header);
 		my ($at1, $old_range, $new_range, $at2) = split;
@@ -327,6 +306,7 @@ for (;;) {
 		my $output_source_code = output_source_code($old);
 		for (my $i = $old_start; $i < $old_end; $i++) {
 			$previous_was_deletion = 1;
+			process_line_change($old, $i, substr($_, 1), 'delete');
 			if ($binary) {
 				$_ = <>;
 				next;
@@ -361,7 +341,7 @@ for (;;) {
 		my @add;
 		for (my $i = $new_start; $i < $new_end; $i++) {
 			if ($previous_was_deletion) {
-                    process_line_change($new, $i, substr($_, 1));  # Process addition after deletion
+                    process_line_change($new, $i, substr($_, 1), 'add');  # Process addition after deletion
                 }
                 $previous_was_deletion = 0;			
 			if ($debug_reconstruction) {
@@ -386,10 +366,10 @@ for (;;) {
 		}
 		$added_lines += $add_len;
 		$removed_lines += $remove_len;
-		 my $file_to_adjust = $new;  # Assuming $new is the filename after potential renaming
-    my $start_line_of_changes = $old_start;  # Start line of the hunk
-    my $delta_lines = $added_lines - $removed_lines;  # Ne
-    adjust_line_numbers($file_to_adjust, $start_line_of_changes, $delta_lines);
+		my $file_to_adjust = $new;  # Assuming $new is the filename after potential renaming
+my $start_line_of_changes = $old_start;  # Start line of the hunk
+my $delta_lines = $added_lines - $removed_lines;  # Calculate delta for the hunk
+adjust_line_numbers($file_to_adjust, $start_line_of_changes, $delta_lines);
 		print "after nref=$#$nref\n" if ($debug_splice);
 		$_ = <> if (defined($_) && $_ =~ m/^\\ No newline at end of file/);
 		if (!defined($_)) {
@@ -414,6 +394,7 @@ for (;;) {
 	} else {
 		bail_out("Invalid state $state");
 	}
+	finalize_changes_after_commit();  # Clean up after processing the commit
 	output_line_modifications();
 }
 close $fh;
@@ -445,42 +426,71 @@ process_last_commit
 	print $growth_file "$timestamp $loc\n" if ($opt_g);
 	$prev_loc = $loc;
 }
+
 sub process_line_change {
-    my ($file, $line_number, $content) = @_;
+    my ($file, $line_number, $content, $action) = @_;
     my $key = "$file:$line_number";
-    if (exists $line_modifications{$key} && $previous_was_deletion) {
-        $line_modifications{$key}{count} += 1;
-        $line_modifications{$key}{content} = $content; 
-    } elsif (!exists $line_modifications{$key}) {
-        $line_modifications{$key} = { count => 1, content => $content };
+    
+    if ($action eq 'delete') {
+        # When deleting, we need to check if this line is being replaced or purely deleted
+        if (exists $line_modifications{$key}) {
+            $line_modifications{$key}{marked_for_deletion} = 1;
+        }
+    } elsif ($action eq 'add') {
+        if (exists $line_modifications{$key} && $line_modifications{$key}{marked_for_deletion}) {
+            # It's a modification, not a pure add
+            $line_modifications{$key}{count} += 1;
+            $line_modifications{$key}{content} = $content;
+            delete $line_modifications{$key}{marked_for_deletion};  # Unmark for deletion
+        } else {
+            # It's a pure add
+            $line_modifications{$key} = { count => 1, content => $content };
+        }
     }
-    $previous_was_deletion = 0;
+}
+
+sub finalize_changes_after_commit {
+    # Final cleanup of line modifications to remove any lines marked for deletion
+    foreach my $key (keys %line_modifications) {
+        delete $line_modifications{$key} if $line_modifications{$key}{marked_for_deletion};
+    }
 }
 
 sub adjust_line_numbers {
-    my ($file, $start_line, $delta) = @_;
+    my ($file, $start_line, $end_line, $delta) = @_;
     my %new_modifications;
 
-    foreach my $key (keys %line_modifications) {
+    foreach my $key (sort { my ($fa, $la) = split(/:/, $a); my ($fb, $lb) = split(/:/, $b); $fa cmp $fb or $la <=> $lb } keys %line_modifications) {
         my ($mod_file, $line_number) = split(/:/, $key);
+
+        # Check if the modification is in the same file
         if ($mod_file eq $file) {
-            if ($line_number >= $start_line) {
+            if ($line_number >= $start_line && $line_number < $end_line) {
+                # Lines that were within the modified range get updated or removed based on delta
+                if ($delta != 0) {
+                    my $new_line_number = $line_number + $delta;
+                    my $new_key = "$file:$new_line_number";
+                    $new_modifications{$new_key} = $line_modifications{$key};
+                }
+            } elsif ($line_number >= $end_line) {
+                # Lines beyond the modified range need to be shifted by delta
                 my $new_line_number = $line_number + $delta;
                 my $new_key = "$file:$new_line_number";
-                $new_modifications{$new_key} = {
-                    count => $line_modifications{$key}{count},
-                    content => $line_modifications{$key}{content},
-                };
+                $new_modifications{$new_key} = $line_modifications{$key};
             } else {
+                # Lines before the modified range stay the same
                 $new_modifications{$key} = $line_modifications{$key};
             }
         } else {
+            # Keep modifications that are in other files
             $new_modifications{$key} = $line_modifications{$key};
         }
     }
 
     %line_modifications = %new_modifications;
 }
+
+
 
 # Reconstruct the state of the Git tree based on the log
 sub
