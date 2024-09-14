@@ -1,7 +1,7 @@
 Hello, World!
-This is a line with an emoji: 😊
+This is a line with a different emoji: 😂 count=2 
 Here are some accented characters: é, ñ, ü, å
 Symbols: ©, ™, ∞, ≠, ±
 Mathematical symbols: ∑, ∫, √, π
-Chinese characters: 中文测试
+Chinese characters: 中文测试  count=2
 Arabic characters: اختبار بالعربية
