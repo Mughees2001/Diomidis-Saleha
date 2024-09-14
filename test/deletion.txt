@@ -1,6 +1,4 @@
 a1 count=1 
 b2 count=2
-e1 count=1
-f2 count=2
-c1 count=2
-d2 count=2
+c3 count=3
+d3 count=3
