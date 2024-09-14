@@ -1,4 +1,8 @@
 a1 count=1
-b1 count=1
+b2 count=2
+e1 count=1
+f1 count=1
+g1 count=1
+h1 count=1
 c1 count=1
-d1 count=1
+d2 count=2
