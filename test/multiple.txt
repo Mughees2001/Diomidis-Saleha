@@ -1,4 +1,4 @@
 a1
-b1
-c1
-d1
+b2 count=2
+c2 count=2
+d2 count=2
