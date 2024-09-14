@@ -12,7 +12,7 @@ $main::VERSION = '0.1';
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 my $csv = Text::CSV->new({ binary => 1, auto_diag => 1, eol => "\n" });
 open my $fh, ">:encoding(utf8)", "line_modifications.csv" or die "line_modifications.csv: $!";
-$csv->say($fh, ["File", "Modification Count", "Status", "Last Content"]);
+$csv->say($fh, ["File", "Modification Count", "Status", "Last Line Number", "Last Content"]);
 
 sub main::HELP_MESSAGE {
     my ($fh) = @_;
@@ -175,6 +175,16 @@ for (;;) {
                 push(@cc, { op => 'set', path => $to, lines => [@{$flt{$from}}] });
                 $oref = $nref = [@{$flt{$old}}];
                 $binary{$to} = 1 if ($binary{$from});
+
+                # Update line_modifications to reflect file rename
+                foreach my $key (keys %line_modifications) {
+                    if ($key =~ /^\Q$from\E:(.*)$/) {
+                        my $line_id = $1;
+                        my $new_key = "$to:$line_id";
+                        $line_modifications{$new_key} = $line_modifications{$key};
+                        delete $line_modifications{$key};
+                    }
+                }
             } elsif (/^copy to (.*)/) {
                 my $to = unquote_unescape($1);
                 $op = 'copy';
@@ -235,44 +245,46 @@ for (;;) {
         my $binary = exists($binary{$old});
         my $output_source_code = output_source_code($old);
 
-        my @deleted_lines = ();
-        my $last_action = '';
+        my @deleted_block = ();
+        my @added_block = ();
+        my $processing_block = 0;
 
         while (defined($_)) {
             if (/^-(.*)/) {
                 my $content = $1;
-                push @deleted_lines, { file => $old, line_number => $old_line_num, content => $content };
+                push @deleted_block, { file => $old, line_number => $old_line_num, content => $content };
                 process_line_change($old, $old_line_num, $content, 'delete');
                 $loc-- if ($output_source_code);
                 $old_line_num++;
-                $last_action = 'delete';
+                $processing_block = 1;
             } elsif (/^\+(.*)/) {
                 my $content = $1;
-                if (@deleted_lines) {
-                    # There are deleted lines; consider this as a modification
-                    my $deleted_line = shift @deleted_lines;
-                    process_line_change($deleted_line->{file}, $deleted_line->{line_number}, $deleted_line->{content}, 'modify', $content);
-                } else {
-                    # No deleted lines; treat as an addition
-                    process_line_change($new, $new_line_num, $content, 'add');
-                }
+                push @added_block, { file => $new, line_number => $new_line_num, content => $content };
                 $loc++ if ($output_source_code);
                 $new_line_num++;
-                $last_action = 'add';
-            } elsif (/^ (.*)/) {
-                # Clear any pending deleted lines
-                @deleted_lines = ();
-                $old_line_num++;
-                $new_line_num++;
-                $last_action = '';
-            } elsif (/^\\ No newline at end of file/) {
-                # Ignore
-                $last_action = '';
+                $processing_block = 1;
+            } elsif (/^ (.*)/ || /^\\ No newline at end of file/) {
+                # Process the blocks if any
+                if ($processing_block) {
+                    process_blocks(\@deleted_block, \@added_block);
+                    @deleted_block = ();
+                    @added_block = ();
+                    $processing_block = 0;
+                }
+                $old_line_num++ unless /^\\ No newline at end of file/;
+                $new_line_num++ unless /^\\ No newline at end of file/;
             } else {
-                last; # End of hunk
+                # End of hunk
+                last;
             }
             $_ = <>;
         }
+
+        # Process any remaining blocks
+        if ($processing_block) {
+            process_blocks(\@deleted_block, \@added_block);
+        }
+
         push_to_cc();
         if (!defined($_)) {
             $state = 'EOF';
@@ -305,6 +317,47 @@ if ($debug_reconstruction) {
 }
 exit 0;
 
+sub process_blocks {
+    my ($deleted_block_ref, $added_block_ref) = @_;
+    my @deleted_block = @$deleted_block_ref;
+    my @added_block = @$added_block_ref;
+
+    if (@deleted_block && @added_block) {
+        # Both blocks exist; treat as modifications
+        my $min = scalar @deleted_block < scalar @added_block ? scalar @deleted_block : scalar @added_block;
+        for (my $i = 0; $i < $min; $i++) {
+            my $deleted_line = $deleted_block[$i];
+            my $added_line = $added_block[$i];
+            process_line_change($deleted_line->{file}, $deleted_line->{line_number}, $deleted_line->{content}, 'modify', $added_line->{content}, $added_line->{line_number});
+        }
+        # Handle any extra lines
+        if (scalar @deleted_block > $min) {
+            for (my $i = $min; $i < scalar @deleted_block; $i++) {
+                my $deleted_line = $deleted_block[$i];
+                # Remaining deletions
+                process_line_change($deleted_line->{file}, $deleted_line->{line_number}, $deleted_line->{content}, 'delete');
+            }
+        }
+        if (scalar @added_block > $min) {
+            for (my $i = $min; $i < scalar @added_block; $i++) {
+                my $added_line = $added_block[$i];
+                # Remaining additions
+                process_line_change($added_line->{file}, $added_line->{line_number}, $added_line->{content}, 'add', undef, $added_line->{line_number});
+            }
+        }
+    } elsif (@deleted_block) {
+        # Only deletions
+        for my $deleted_line (@deleted_block) {
+            process_line_change($deleted_line->{file}, $deleted_line->{line_number}, $deleted_line->{content}, 'delete');
+        }
+    } elsif (@added_block) {
+        # Only additions
+        for my $added_line (@added_block) {
+            process_line_change($added_line->{file}, $added_line->{line_number}, $added_line->{content}, 'add', undef, $added_line->{line_number});
+        }
+    }
+}
+
 sub process_last_commit {
     my $delta = $loc - $prev_loc;
 
@@ -321,7 +374,7 @@ sub process_last_commit {
 }
 
 sub process_line_change {
-    my ($file, $line_number, $content, $action, $new_content) = @_;
+    my ($file, $line_number, $content, $action, $new_content, $new_line_number) = @_;
     my $line_id = md5_hex($content);
     my $key = "$file:$line_id";
 
@@ -337,7 +390,8 @@ sub process_line_change {
             # Line exists; increment modification count
             $line_modifications{$new_key}{count} += 1;
             $line_modifications{$new_key}{deleted} = 0;
-            $line_modifications{$new_key}{line_numbers}{$hash} = $line_number;
+            $line_modifications{$new_key}{line_numbers}{$hash} = $new_line_number;
+            $line_modifications{$new_key}{last_line_number} = $new_line_number;
             $line_modifications{$new_key}{content} = $content;  # Update content in case it changed
         } else {
             # New line; initialize modification count to 1
@@ -345,7 +399,8 @@ sub process_line_change {
                 count => 1,
                 content => $content,
                 deleted => 0,
-                line_numbers => { $hash => $line_number },
+                line_numbers => { $hash => $new_line_number },
+                last_line_number => $new_line_number,
             };
         }
     } elsif ($action eq 'modify') {
@@ -355,7 +410,8 @@ sub process_line_change {
         if (exists $line_modifications{$key}) {
             $line_modifications{$key}{count} += 1;
             $line_modifications{$key}{deleted} = 0;
-            $line_modifications{$key}{line_numbers}{$hash} = $line_number;
+            $line_modifications{$key}{line_numbers}{$hash} = $new_line_number;
+            $line_modifications{$key}{last_line_number} = $new_line_number;
             $line_modifications{$key}{content} = $new_content;
             # Update the key in the hash
             $line_modifications{$new_key} = delete $line_modifications{$key};
@@ -365,7 +421,8 @@ sub process_line_change {
                 count => 1,
                 content => $new_content,
                 deleted => 0,
-                line_numbers => { $hash => $line_number },
+                line_numbers => { $hash => $new_line_number },
+                last_line_number => $new_line_number,
             };
         }
     }
@@ -545,14 +602,15 @@ sub output_line_modifications {
         my $count = $data->{count};
         my $content = $data->{content};
         my $status = $data->{deleted} ? 'Deleted' : 'Active';
-        $csv->say($fh, [$file, $count, $status, $content]);
-        print "File: $file, Modifications: $count, Status: $status, Content: $content\n";
+        my $line_number = $data->{last_line_number} // 'N/A';
+        $csv->say($fh, [$file, $count, $status, $line_number, $content]);
+        print "File: $file, Modifications: $count, Status: $status, Line Number: $line_number, Content: $content\n";
     }
 }
 
 sub test_line_details {
-		 # l s s c c b a a s a l
-	str_equal("2 0 0 0 0 0 0 0 0 0 0", line_details("xx"));
+         # l s s c c b a a s a l
+    str_equal("2 0 0 0 0 0 0 0 0 0 0", line_details("xx"));
 	str_equal("3 0 1 0 0 0 0 0 0 0 0", line_details("'x'"));
 	str_equal("3 0 0 1 0 0 0 0 0 0 0", line_details('#x('));
 	str_equal("3 0 0 1 0 0 0 0 0 0 0", line_details('/*('));
