@@ -1,59 +1,57 @@
+#!/usr/bin/perl
 
 use strict;
 use warnings;
+use Digest::MD5 qw(md5_hex);
 use File::Path qw(make_path remove_tree);
 use Getopt::Std;
 use Text::CSV;
-
 
 $main::VERSION = '0.1';
 
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 my $csv = Text::CSV->new({ binary => 1, auto_diag => 1, eol => "\n" });
 open my $fh, ">:encoding(utf8)", "line_modifications.csv" or die "line_modifications.csv: $!";
-$csv->say($fh, ["File", "Line Number", "Modification Count", "Last Content"]);  # Header row
+$csv->say($fh, ["File", "Modification Count", "Status", "Last Content"]);
 
-
-sub
-main::HELP_MESSAGE
-{
-	my ($fh) = @_;
-	print $fh qq{
+sub main::HELP_MESSAGE {
+    my ($fh) = @_;
+    print $fh qq{
 Usage: $0 [options ...] [input file ...]
--c	Output in "compressed" format: commit, followed by birthday of deaths
--d 	Report the LoC delta
--D opts	Debug as specified by the letters in opts
-	C Show commit set changes
-	D Show diff headers
-	E Show diff extended headers
-	H Show each commit SHA, timestamp header
-	L Show LoC change processing
-	P Show push to change set operations
-	R Reconstruct the repository contents from its log
-	@ Show range headers
-	S Show results of splicing operations
-	u Run unit tests
--e SHA	End processing after the specified (full) SHA commit hash
--E	Redirect (debugging) output to stderr
--g file	Create a growth file with line count of live lines at every commit
--h	Print usage information and exit
--l	Associate with each line details about its composition
--q	Quiet; do not output commit and timestamp on normal processing
--s	Report only changes in source code files (based on their suffix)
--t	Show tokens with lifetime
+-c  Output in "compressed" format: commit, followed by birthday of deaths
+-d  Report the LoC delta
+-D opts  Debug as specified by the letters in opts
+    C Show commit set changes
+    D Show diff headers
+    E Show diff extended headers
+    H Show each commit SHA, timestamp header
+    L Show LoC change processing
+    P Show push to change set operations
+    R Reconstruct the repository contents from its log
+    @ Show range headers
+    S Show results of splicing operations
+    u Run unit tests
+-e SHA  End processing after the specified (full) SHA commit hash
+-E  Redirect (debugging) output to stderr
+-g file  Create a growth file with line count of live lines at every commit
+-h  Print usage information and exit
+-l  Associate with each line details about its composition
+-q  Quiet; do not output commit and timestamp on normal processing
+-s  Report only changes in source code files (based on their suffix)
+-t  Show tokens with lifetime
 };
 }
 
 our($opt_c, $opt_d, $opt_D, $opt_e, $opt_E, $opt_g, $opt_h, $opt_l, $opt_q, $opt_s, $opt_t);
 
 if (!getopts('cdD:e:Eg:hlqst')) {
-	main::HELP_MESSAGE(*STDERR);
-	exit 1;
+    main::HELP_MESSAGE(*STDERR);
+    exit 1;
 }
 
 if (defined($opt_h)) {
-	HELP_MESSAGE(\*STDOUT);
-	exit(0);
+    HELP_MESSAGE(\*STDOUT);
+    exit(0);
 }
 
 open(STDOUT, ">&STDERR") if (defined($opt_E));
@@ -66,665 +64,493 @@ my $prev_loc = 0;
 
 open($growth_file, '>', $opt_g) || die "Unable to open $opt_g: $!\n" if ($opt_g);
 
-# Return undef or true depending on whether the specified
-# debug option is set
-sub
-debug_option
-{
-	my($opt) = @_;
-
-	return undef unless defined($opt_D);
-	return ($opt_D =~ m/$opt/);
+sub debug_option {
+    my($opt) = @_;
+    return undef unless defined($opt_D);
+    return ($opt_D =~ m/$opt/);
 }
 
 my $previous_was_deletion = 0;
-# Reconstruct the repository contents from its log -D R
 my $debug_reconstruction = debug_option('R');
-# Show results of splicing operations -D S
 my $debug_splice = debug_option('S');
-# Show each commit SHA, timestamp header -D H
 my $debug_commit_header = debug_option('H');
-# Show diff headers -D D
 my $debug_diff_header = debug_option('D');
-# Show diff extended headers -D E
 my $debug_diff_extended = debug_option('E');
-# Show range headers -D @
 my $debug_range_header = debug_option('@');
-# Show commit set changes -D C
 my $debug_commit_changes = debug_option('C');
-# Show push to change set operations -D P
 my $debug_push_cc = debug_option('P');
-# Show LoC change processing -D L
 my $debug_loc = debug_option('L');
 
 if (debug_option('u')) {
-	test_line_details();
-	exit 0;
+    test_line_details();
+    exit 0;
 }
-
 
 my $state = 'commit';
 $_ = <>;
 chop;
 
-# Old and new changed files
 my ($old, $new);
-# One of inplace, copy, rename, del
 my $op;
-
-# Details of current commit
 my ($commit, $hash, $timestamp);
-
-# File line timestamps (or contents when debugging through reconstruction)
 my %flt;
-
-# Files that are binary; these are not tracked on a line-by-line basis
-# (Sometimes line diffs appear for a file that was first committed as
-# binary.)
 my %binary;
-
-# Commit changes. To preserve the isolation between changes performed
-# during a commit, all changes are recorded here and then atomically
-# committed at the end.
-# Each record has:
-#   op {set, del}
-#   path
-#   lines
 my @cc;
 
-# Records of deleted lines
-# Output at the end of a commit in order to report
-# commit size, if needed
 my @delete_records;
 
-# Number of lines added to new file
 my $added_lines;
-# Number of lines removed from old and new file
 my $removed_lines;
-# Reference to copy of the old and new file contents
 my $oref;
 my $nref;
 
 for (;;) {
+    if ($state eq 'commit') {
+        process_last_commit() if (defined($hash));
+        ($commit, $hash, $timestamp) = split;
+        print "commit $hash $timestamp\n" if ($opt_c || $debug_commit_header);
+        print STDERR "commit $hash $timestamp\n" if (!$debug_reconstruction && !$opt_q);
 
-	if ($state eq 'commit') {
-		process_last_commit() if (defined($hash));
-		# Timestamp
-		($commit, $hash, $timestamp) = split;
-		print "commit $hash $timestamp\n" if ($opt_c || $debug_commit_header);
-		print STDERR "commit $hash $timestamp\n" if (!$debug_reconstruction && !$opt_q);
+        $_ = <>;
+        if (!defined($_)) {
+            $state = 'EOF';
+        } elsif (/^$/) {
+            $_ = <>;
+            if (!defined($_)) {
+                $state = 'EOF';
+            } elsif (/^diff /) {
+                $state = 'diff';
+                chop;
+            } elsif (/^commit /) {
+                chop;
+            } else {
+                bail_out('Expecting diff, commit, or EOF');
+            }
+        } elsif (/^commit /) {
+            chop;
+        } else {
+            bail_out('Expecting an empty line or commit');
+        }
+    } elsif ($state eq 'diff') {
+        hide_escaped_quotes();
+        bail_out('Expecting a diff command') unless (
+            m/^diff --git a\/([^ ]*) b\/(.*)/ ||
+            m/^diff --git "a\/((?:[^"\\]|\\.)*)" "b\/((?:[^"\\]|\\.)*)"/ ||
+            m/^diff --git a\/([^ ]*) "b\/((?:[^"\\]|\\.)*)"/ ||
+            m/^diff --git "a\/((?:[^"\\]|\\.)*)" b\/(.*)/ ||
+            m/^diff --git a\/(.*) b\/(.*)/);
+        $old = $1;
+        $new = $2;
+        $old = unescape($old) if (/\"/);
+        $new = unescape($new) if (/\"/);
 
-		# Separator
-		$_ = <>;
-		if (!defined($_)) {
-			$state = 'EOF';
-		} elsif (/^$/) {
-			$_ = <>;
-			if (!defined($_)) {
-				$state = 'EOF';
-			} elsif (/^diff /) {
-				$state = 'diff';
-				chop;
-			} elsif (/^commit /) {
-				# This happens on an empty commit with git diff
-				chop;
-			} else {
-				bail_out('Expecting diff, commit, or EOF');
-			}
-		} elsif (/^commit /) {
-			# This happens on an empty commit
-			chop;
-			;
-		} else {
-			bail_out('Expecting an empty line or commit');
-		}
-	} elsif ($state eq 'diff') {
-		# Diff header
-		hide_escaped_quotes();
-		bail_out('Expecting a diff command') unless (
-			# a b
-			m/^diff --git a\/([^ ]*) b\/(.*)/ ||
-			# "a" "b"
-			# See http://stackoverflow.com/questions/249791/regex-for-quoted-string-with-escaping-quotes
-			# for an explanation of the RE that includes escaped
-			# quotes
-			m/^diff --git "a\/((?:[^"\\]|\\.)*)" "b\/((?:[^"\\]|\\.)*)"/ ||
-			# a "b"
-			m/^diff --git a\/([^ ]*) "b\/((?:[^"\\]|\\.)*)"/ ||
-			# "a" b
-			m/^diff --git "a\/((?:[^"\\]|\\.)*)" b\/(.*)/ ||
-			# a and b with spaces (and no component " b/")
-			# This was found in one of the repos
-			m/^diff --git a\/(.*) b\/(.*)/);
-		$old = $1;
-		$new = $2;
-		$old = unescape($old) if (/\"/);
-		$new = unescape($new) if (/\"/);
+        print "$_\n" if ($debug_diff_header);
+        print "old=[$old] new=[$new]\n" if ($debug_diff_header);
 
-		print "$_\n" if ($debug_diff_header);
-		print "old=[$old] new=[$new]\n" if ($debug_diff_header);
+        $oref = defined($flt{$old}) ? [@{$flt{$old}}] : [];
+        $nref = ($old eq $new) ? $oref : defined($flt{$new}) ? [@{$flt{$new}}] : [];
 
-		$oref = defined($flt{$old}) ? [@{$flt{$old}}] : [];
-		$nref = ($old eq $new) ? $oref : defined($flt{$new}) ? [@{$flt{$new}}] : [];
+        $state = 'EOF';
+        my $from;
+        $op = 'inplace';
+        while (<>) {
+            print "diff extended header: $_" if ($debug_diff_extended);
+            chop;
+            if (/^--- /) {
 
-		$state = 'EOF';
-		# Read the "extended header lines" to handle copies and renames
-		my $from;
-		$op = 'inplace';
-		while (<>) {
-			print "diff extended header: $_" if ($debug_diff_extended);
-			chop;
-			if (/^--- /) {
-				# Start of a file difference
-				# --- a/main.c
+                $_ = <>;
 
-				# +++ b/main.c
-				$_ = <>;
-
-				# Range
-				$_ = <>;
-				chop;
-				$state = 'range';
-				$added_lines = $removed_lines = 0;
-				last;
-			} elsif (/^(copy|rename) from (.*)/) {
-				$from = unquote_unescape($2);
-			} elsif (/^rename to (.*)/) {
-				my $to = unquote_unescape($1);
-				$op = 'rename';
-				bail_out('Missing rename from') unless (defined($from));
-				push(@cc, { op => 'del', path => $from });
-				push(@cc, { op => 'set', path => $to, lines => [@{$flt{$from}}] });
-				$oref = $nref = [@{$flt{$old}}];
-				$binary{$to} = 1 if ($binary{$from});
-			} elsif (/^copy to (.*)/) {
-				my $to = unquote_unescape($1);
-				$op = 'copy';
-				bail_out('Missing copy from') unless (defined($from));
-				push(@cc, { op => 'set', path => $to, lines => [@{$flt{$from}}] });
-				$loc += $#{$flt{$from}} + 1 if ($opt_g && output_source_code($to));
-				$nref = [@{$flt{$old}}];
-				$binary{$to} = 1 if ($binary{$from});
-			} elsif (/^commit /) {
-				$state = 'commit';
-				last;
-			} elsif (/^diff --git /) {
-				$state = 'diff';
-				last;
-			} elsif (/^new file mode /) {
-				push(@cc, { op => 'set', path => $old, lines => [] });
-			} elsif (/^deleted file mode /) {
-				$op = 'del';
-				push(@cc, { op => 'del', path => $old });
-				# Print death times of deleted file's lines
-				if (!$debug_reconstruction && output_source_code($old)) {
-					for my $l (@{$flt{$old}}) {
-						if ($opt_c) {
-							print "$l\n";
-						} else {
-							push(@delete_records, "$l $timestamp");
-						}
-					}
-				}
-			} elsif (/^Binary files ([^ ]*) and ([^ ]*) differ/) {
-				$binary{$old} = 1;
-				$_ = <>;
-				if (!defined($_)) {
-					$state = 'EOF';
-					last;
-				} elsif (/^commit /) {
-					chop;
-					$state = 'commit';
-					last;
-				} elsif (/^diff --git /) {
-					chop;
-					$state = 'diff';
-					last;
-				} else {
-					bail_out('Expected diff, commit, or EOF');
-				}
-			}
-		}
-	} elsif ($state eq 'range') {
-		
-		# Ranges within files
-		print "$_\n" if ($debug_range_header);
-		my ($at1, $old_range, $new_range, $at2) = split;
-		bail_out('Expecting a diff range') unless ($at1 eq '@@' && $at2 eq '@@');
-		my ($old_start, $old_end) = range_parse($old_range);
-		my ($new_start, $new_end) = range_parse($new_range);
-
-		$_ = <>;
-		my ($old_offset, $new_offset);
-		$new_offset = $added_lines - $removed_lines;
-		if ($oref == $nref) {
-			$old_offset = $new_offset = $added_lines - $removed_lines;
-		} else {
-			$old_offset = -$removed_lines;
-		}
-		my $binary = exists($binary{$old});
-		my $output_source_code = output_source_code($old);
-		for (my $i = $old_start; $i < $old_end; $i++) {
-			$previous_was_deletion = 1;
-			process_line_change($old, $i, substr($_, 1), 'delete');
-			if ($binary) {
-				$_ = <>;
-				next;
-			}
-			bail_out('Expecting a removed line') unless (m/^-/);
-			$loc-- if ($output_source_code);
-			if (defined($oref->[$i + $old_offset])) {
-				if ($debug_reconstruction) {
-					bail_out("Expecting at($i + $old_offset) " . $oref->[$i + $old_offset]) unless (substr($oref->[$i + $old_offset], 1) eq substr($_, 1));
-				} elsif ($output_source_code) {
-					if ($opt_c) {
-						print "$oref->[$i + $old_offset]\n";
-					} else {
-						push(@delete_records, "$oref->[$i + $old_offset] $timestamp");
-					}
-				}
-			} else {
-				print STDERR "Warning: $hash line $. unknown line $old:", $i + 1, "\n";
-			}
-			$_ = <>;
-		}
-		my $remove_len = $old_end - $old_start;
-		print "before oref=$#$oref ns=$old_start len=$remove_len\n" if ($debug_splice);
-		if (!$binary) {
-			splice(@$oref, $old_start + $old_offset, $remove_len) unless ($remove_len == 0);
-			if ($oref != $nref) {
-				splice(@$nref, $old_start + $new_offset, $remove_len) unless ($remove_len == 0);
-			}
-		}
-		print "after oref=$#$oref\n" if ($debug_splice);
-		$_ = <> if (defined($_) && $_ =~ m/^\\ No newline at end of file/);
-		my @add;
-		for (my $i = $new_start; $i < $new_end; $i++) {
-			if ($previous_was_deletion) {
-                    process_line_change($new, $i, substr($_, 1), 'add');  # Process addition after deletion
+                $_ = <>;
+                chop;
+                $state = 'range';
+                $added_lines = $removed_lines = 0;
+                last;
+            } elsif (/^(copy|rename) from (.*)/) {
+                $from = unquote_unescape($2);
+            } elsif (/^rename to (.*)/) {
+                my $to = unquote_unescape($1);
+                $op = 'rename';
+                bail_out('Missing rename from') unless (defined($from));
+                push(@cc, { op => 'del', path => $from });
+                push(@cc, { op => 'set', path => $to, lines => [@{$flt{$from}}] });
+                $oref = $nref = [@{$flt{$old}}];
+                $binary{$to} = 1 if ($binary{$from});
+            } elsif (/^copy to (.*)/) {
+                my $to = unquote_unescape($1);
+                $op = 'copy';
+                bail_out('Missing copy from') unless (defined($from));
+                push(@cc, { op => 'set', path => $to, lines => [@{$flt{$from}}] });
+                $loc += $#{$flt{$from}} + 1 if ($opt_g && output_source_code($to));
+                $nref = [@{$flt{$old}}];
+                $binary{$to} = 1 if ($binary{$from});
+            } elsif (/^commit /) {
+                $state = 'commit';
+                last;
+            } elsif (/^diff --git /) {
+                $state = 'diff';
+                last;
+            } elsif (/^new file mode /) {
+                push(@cc, { op => 'set', path => $old, lines => [] });
+            } elsif (/^deleted file mode /) {
+                $op = 'del';
+                push(@cc, { op => 'del', path => $old });
+                if (!$debug_reconstruction && output_source_code($old)) {
+                    for my $l (@{$flt{$old}}) {
+                        if ($opt_c) {
+                            print "$l\n";
+                        } else {
+                            push(@delete_records, "$l $timestamp");
+                        }
+                    }
                 }
-                $previous_was_deletion = 0;			
-			if ($debug_reconstruction) {
-				push(@add, $_);
-			} elsif ($opt_l) {
-				push(@add, "$timestamp L " . line_details(substr($_, 1)));
-			} elsif ($opt_t) {
-				my $tokinfo = $_;
-				$tokinfo =~ s/^.(.*)\n/$1/;
-				push(@add, "$timestamp $tokinfo")
-			} else {
-				push(@add, $timestamp);
-			}
-			bail_out('Expecting an added line') unless (m/^\+/);
-			$loc++ if (!$binary && $output_source_code);
-			$_ = <>;
-		}
-		my $add_len = $new_end - $new_start;
-		print "before nref=$#$nref ns=$new_start len=$add_len\n" if ($debug_splice);
-		if (!$binary && $add_len > 0) {
-			splice(@$nref, $new_start, 0, @add);
-		}
-		$added_lines += $add_len;
-		$removed_lines += $remove_len;
-		my $file_to_adjust = $new;  # Assuming $new is the filename after potential renaming
-my $start_line_of_changes = $old_start;  # Start line of the hunk
-my $delta_lines = $added_lines - $removed_lines;  # Calculate delta for the hunk
-adjust_line_numbers($file_to_adjust, $start_line_of_changes, $delta_lines);
-		print "after nref=$#$nref\n" if ($debug_splice);
-		$_ = <> if (defined($_) && $_ =~ m/^\\ No newline at end of file/);
-		if (!defined($_)) {
-			push_to_cc();
-			$state = 'EOF';
-		} elsif (/^@@ /) {
-			chop;
-			# implicit $state = 'range';
-		} elsif (/^diff --git /) {
-			chop;
-			push_to_cc();
-			$state = 'diff';
-		} elsif (/^commit /) {
-			chop;
-			push_to_cc();
-			$state = 'commit';
-		} else {
-			bail_out('Expected diff, @@, commit, or EOF');
-		}
-	} elsif ($state eq 'EOF') {
-		last;
-	} else {
-		bail_out("Invalid state $state");
-	}
-	finalize_changes_after_commit();  # Clean up after processing the commit
-	output_line_modifications();
+            } elsif (/^Binary files ([^ ]*) and ([^ ]*) differ/) {
+                $binary{$old} = 1;
+                $_ = <>;
+                if (!defined($_)) {
+                    $state = 'EOF';
+                    last;
+                } elsif (/^commit /) {
+                    chop;
+                    $state = 'commit';
+                    last;
+                } elsif (/^diff --git /) {
+                    chop;
+                    $state = 'diff';
+                    last;
+                } else {
+                    bail_out('Expected diff, commit, or EOF');
+                }
+            }
+        }
+    } elsif ($state eq 'range') {
+        print "$_\n" if ($debug_range_header);
+        my ($at1, $old_range, $new_range, $at2) = split;
+        bail_out('Expecting a diff range') unless ($at1 eq '@@' && $at2 eq '@@');
+        my ($old_start, $old_end) = range_parse($old_range);
+        my ($new_start, $new_end) = range_parse($new_range);
+        $_ = <>;
+        my ($old_line_num, $new_line_num);
+        $old_line_num = $old_start;
+        $new_line_num = $new_start;
+        my $binary = exists($binary{$old});
+        my $output_source_code = output_source_code($old);
+
+        my @deleted_lines = ();
+        my $last_action = '';
+
+        while (defined($_)) {
+            if (/^-(.*)/) {
+                my $content = $1;
+                push @deleted_lines, { file => $old, line_number => $old_line_num, content => $content };
+                process_line_change($old, $old_line_num, $content, 'delete');
+                $loc-- if ($output_source_code);
+                $old_line_num++;
+                $last_action = 'delete';
+            } elsif (/^\+(.*)/) {
+                my $content = $1;
+                if (@deleted_lines) {
+                    # There are deleted lines; consider this as a modification
+                    my $deleted_line = shift @deleted_lines;
+                    process_line_change($deleted_line->{file}, $deleted_line->{line_number}, $deleted_line->{content}, 'modify', $content);
+                } else {
+                    # No deleted lines; treat as an addition
+                    process_line_change($new, $new_line_num, $content, 'add');
+                }
+                $loc++ if ($output_source_code);
+                $new_line_num++;
+                $last_action = 'add';
+            } elsif (/^ (.*)/) {
+                # Clear any pending deleted lines
+                @deleted_lines = ();
+                $old_line_num++;
+                $new_line_num++;
+                $last_action = '';
+            } elsif (/^\\ No newline at end of file/) {
+                # Ignore
+                $last_action = '';
+            } else {
+                last; # End of hunk
+            }
+            $_ = <>;
+        }
+        push_to_cc();
+        if (!defined($_)) {
+            $state = 'EOF';
+        } elsif (/^@@ /) {
+            chop;
+            $state = 'range';
+        } elsif (/^diff --git /) {
+            chop;
+            $state = 'diff';
+        } elsif (/^commit /) {
+            chop;
+            $state = 'commit';
+        } else {
+            bail_out('Expected diff, @@, commit, or EOF');
+        }
+        output_line_modifications();
+    } elsif ($state eq 'EOF') {
+        last;
+    } else {
+        bail_out("Invalid state $state");
+    }
 }
 close $fh;
 
 process_last_commit();
 if ($debug_reconstruction) {
-	reconstruct();
+    reconstruct();
 } else {
-	dump_alive();
+    dump_alive();
 }
 exit 0;
 
-# Write the commit's effect on the project's LOC value
-sub
-process_last_commit
-{
-	my $delta = $loc - $prev_loc;
+sub process_last_commit {
+    my $delta = $loc - $prev_loc;
 
-	print "prev_loc=$prev_loc loc=$loc delta=$delta\n" if ($debug_loc);
+    print "prev_loc=$prev_loc loc=$loc delta=$delta\n" if ($debug_loc);
+    my $eol = ($opt_d ? " $delta\n" : "\n");
+    for (@delete_records) {
+        print "$_", $eol;
+    }
+    undef @delete_records;
 
-	# Print records of deleted lines
-	my $eol = ($opt_d ? " $delta\n" : "\n");
-	for (@delete_records) {
-		print "$_", $eol;
-	}
-	undef @delete_records;
-
-	commit_changes();
-	print $growth_file "$timestamp $loc\n" if ($opt_g);
-	$prev_loc = $loc;
+    commit_changes();
+    print $growth_file "$timestamp $loc\n" if ($opt_g);
+    $prev_loc = $loc;
 }
 
 sub process_line_change {
-    my ($file, $line_number, $content, $action) = @_;
-    my $key = "$file:$line_number";
-    
+    my ($file, $line_number, $content, $action, $new_content) = @_;
+    my $line_id = md5_hex($content);
+    my $key = "$file:$line_id";
+
     if ($action eq 'delete') {
-        # When deleting, we need to check if this line is being replaced or purely deleted
         if (exists $line_modifications{$key}) {
-            $line_modifications{$key}{marked_for_deletion} = 1;
+            # Mark the line as deleted
+            $line_modifications{$key}{deleted} = 1;
         }
     } elsif ($action eq 'add') {
-        if (exists $line_modifications{$key} && $line_modifications{$key}{marked_for_deletion}) {
-            # It's a modification, not a pure add
+        my $new_line_id = md5_hex($content);
+        my $new_key = "$file:$new_line_id";
+        if (exists $line_modifications{$new_key}) {
+            # Line exists; increment modification count
+            $line_modifications{$new_key}{count} += 1;
+            $line_modifications{$new_key}{deleted} = 0;
+            $line_modifications{$new_key}{line_numbers}{$hash} = $line_number;
+            $line_modifications{$new_key}{content} = $content;  # Update content in case it changed
+        } else {
+            # New line; initialize modification count to 1
+            $line_modifications{$new_key} = {
+                count => 1,
+                content => $content,
+                deleted => 0,
+                line_numbers => { $hash => $line_number },
+            };
+        }
+    } elsif ($action eq 'modify') {
+        my $new_line_id = md5_hex($new_content);
+        my $new_key = "$file:$new_line_id";
+        # Map old line to new line
+        if (exists $line_modifications{$key}) {
             $line_modifications{$key}{count} += 1;
-            $line_modifications{$key}{content} = $content;
-            delete $line_modifications{$key}{marked_for_deletion};  # Unmark for deletion
+            $line_modifications{$key}{deleted} = 0;
+            $line_modifications{$key}{line_numbers}{$hash} = $line_number;
+            $line_modifications{$key}{content} = $new_content;
+            # Update the key in the hash
+            $line_modifications{$new_key} = delete $line_modifications{$key};
         } else {
-            # It's a pure add
-            $line_modifications{$key} = { count => 1, content => $content };
+            # Line didn't exist; perhaps this is the first time
+            $line_modifications{$new_key} = {
+                count => 1,
+                content => $new_content,
+                deleted => 0,
+                line_numbers => { $hash => $line_number },
+            };
         }
     }
 }
 
-sub finalize_changes_after_commit {
-    # Final cleanup of line modifications to remove any lines marked for deletion
-    foreach my $key (keys %line_modifications) {
-        delete $line_modifications{$key} if $line_modifications{$key}{marked_for_deletion};
+sub reconstruct {
+    my $base_dir = 'RECONSTRUCTION';
+    remove_tree($base_dir);
+    for my $f (keys %flt) {
+        next if ($f eq '/dev/null');
+        next unless defined($flt{$f});
+        my $path = "$base_dir/$f";
+        my $dir = $path;
+        $dir =~ s|[^/]*$||;
+        make_path($dir);
+        open(my $out, '>', $path) || die "Unable to open $path: $!\n";
+        for my $line (@{$flt{$f}}) {
+            print $out substr($line, 1);
+        }
     }
 }
 
-sub adjust_line_numbers {
-    my ($file, $start_line, $end_line, $delta) = @_;
-    my %new_modifications;
+sub dump_alive {
+    my $eol;
 
-    foreach my $key (sort { my ($fa, $la) = split(/:/, $a); my ($fb, $lb) = split(/:/, $b); $fa cmp $fb or $la <=> $lb } keys %line_modifications) {
-        my ($mod_file, $line_number) = split(/:/, $key);
+    if ($opt_c) {
+        print "END\n";
+        $eol = "\n";
+    } else {
+        $eol = " alive NA\n";
+    }
 
-        # Check if the modification is in the same file
-        if ($mod_file eq $file) {
-            if ($line_number >= $start_line && $line_number < $end_line) {
-                # Lines that were within the modified range get updated or removed based on delta
-                if ($delta != 0) {
-                    my $new_line_number = $line_number + $delta;
-                    my $new_key = "$file:$new_line_number";
-                    $new_modifications{$new_key} = $line_modifications{$key};
+    for my $f (keys %flt) {
+        next if ($f eq '/dev/null');
+        next unless defined($flt{$f});
+        next unless (output_source_code($f));
+        for my $line (@{$flt{$f}}) {
+            print $line, $eol;
+        }
+    }
+}
+
+sub bail_out {
+    my ($expect) = @_;
+    print STDERR "commit $hash $timestamp\n";
+    print STDERR "Line $.: Unexpected $_\n";
+    print STDERR "($expect)\n";
+    reconstruct();
+    exit 1;
+}
+
+sub range_parse {
+    my ($range) = @_;
+    if ($range =~ m/[+-](\d+)\,(\d+)$/) {
+        if ($2 == 0) {
+            return (0, 0);
+        } else {
+            return ($1 - 1, $1 + $2 - 1);
+        }
+    } elsif ($range =~ m/[+-](\d+)$/) {
+        return ($1 - 1, $1);
+    } else {
+        bail_out('Expecting a diff range');
+    }
+}
+
+sub commit_changes {
+    for my $rec (@cc) {
+        print "Change ($rec->{op}) $rec->{path}\n" if ($debug_commit_changes);
+        if ($rec->{op} eq 'set') {
+            if (defined($opt_d)) {
+                my $delta = $loc - $prev_loc;
+                for (@{$rec->{lines}}) {
+                    if ($opt_t || $opt_l) {
+                        $_ =~ s/^$timestamp ([A-Z])/$timestamp $delta $1/;
+                    } else {
+                        $_ .= " $delta" if ($_ eq $timestamp);
+                    }
                 }
-            } elsif ($line_number >= $end_line) {
-                # Lines beyond the modified range need to be shifted by delta
-                my $new_line_number = $line_number + $delta;
-                my $new_key = "$file:$new_line_number";
-                $new_modifications{$new_key} = $line_modifications{$key};
-            } else {
-                # Lines before the modified range stay the same
-                $new_modifications{$key} = $line_modifications{$key};
             }
+            $flt{$rec->{path}} = $rec->{lines};
+        } elsif ($rec->{op} eq 'del') {
+            delete $flt{$rec->{path}};
+            delete $binary{$rec->{path}};
         } else {
-            # Keep modifications that are in other files
-            $new_modifications{$key} = $line_modifications{$key};
+            bail_out("Unknown change record $rec->{op}");
         }
     }
+    undef @cc;
 
-    %line_modifications = %new_modifications;
+    if (defined($opt_e) && $opt_e eq $hash) {
+        reconstruct();
+        exit 0;
+    }
 }
 
-
-
-# Reconstruct the state of the Git tree based on the log
-sub
-reconstruct
-{
-	my $base_dir = 'RECONSTRUCTION';
-	remove_tree($base_dir);
-	for my $f (keys %flt) {
-		next if ($f eq '/dev/null');
-		next unless defined($flt{$f});
-		my $path = "$base_dir/$f";
-		my $dir = $path;
-		$dir =~ s|[^/]*$||;
-		make_path($dir);
-		open(my $out, '>', $path) || die "Unable to open $path: $!\n";
-		for my $line (@{$flt{$f}}) {
-			print $out substr($line, 1);
-		}
-	}
+sub push_to_cc {
+    print "op=$op $old $new\n" if ($debug_push_cc);
+    return if ($op eq 'del');
+    push(@cc, { op => 'set', path => $old, lines => $oref }) if ($oref != $nref && $op ne 'copy');
+    push(@cc, { op => 'set', path => $new, lines => $nref });
 }
 
-# Print birth timestamps of files that are still alive
-sub
-dump_alive
-{
-	my $eol;
-
-	if ($opt_c) {
-		print "END\n";
-		$eol = "\n";
-	} else {
-		$eol = " alive NA\n";
-	}
-
-	for my $f (keys %flt) {
-		next if ($f eq '/dev/null');
-		next unless defined($flt{$f});
-		next unless (output_source_code($f));
-		for my $line (@{$flt{$f}}) {
-			print $line, $eol;
-		}
-	}
+sub output_source_code {
+    return 1 unless ($opt_s);
+    my ($name) = @_;
+    return ($name =~ m/\.(C|c|cc|cpp|cs|cxx|hh|hpp|h\+\+|c\+\+|h|H|hxx|java|((php[3457s]?)|pht|php-s)|py)$/);
 }
 
-
-sub
-bail_out
-{
-	my ($expect) = @_;
-	print STDERR "commit $hash $timestamp\n";
-	print STDERR "Line $.: Unexpected $_\n";
-	print STDERR "($expect)\n";
-	reconstruct();
-	exit 1;
+sub hide_escaped_quotes {
+    s/([^\\])\\\"/$1\001/g;
 }
 
-# Return a diff range as a [start, end) interval
-sub
-range_parse
-{
-	my ($range) = @_;
-	if ($range =~ m/[+-](\d+)\,(\d+)$/) {
-		if ($2 == 0) {
-			return (0, 0);
-		} else {
-			return ($1 - 1, $1 + $2 - 1);
-		}
-	} elsif ($range =~ m/[+-](\d+)$/) {
-		return ($1 - 1, $1);
-	} else {
-		bail_out('Expecting a diff range');
-	}
+sub unquote_unescape {
+    my ($n) = @_;
+    return $n unless (/\"/);
+
+    $n =~ s/([^\\])\\\"/$1\001/g;
+    $n =~ s/\"//g;
+    return unescape($n);
 }
 
-# Commit the commit changes recorded in @cc
-sub
-commit_changes
-{
-	for my $rec (@cc) {
-		print "Change ($rec->{op}) $rec->{path}\n" if ($debug_commit_changes);
-		if ($rec->{op} eq 'set') {
-			# Mark lines coming from commits with the commit's size
-			if (defined($opt_d)) {
-				my $delta = $loc - $prev_loc;
-				for (@{$rec->{lines}}) {
-					if ($opt_t || $opt_l) {
-						$_ =~ s/^$timestamp ([A-Z])/$timestamp $delta $1/;
-					} else {
-						$_ .= " $delta" if ($_ eq $timestamp);
-					}
-				}
-			}
-			$flt{$rec->{path}} = $rec->{lines};
-		} elsif ($rec->{op} eq 'del') {
-			delete $flt{$rec->{path}};
-			delete $binary{$rec->{path}};
-		} else {
-			bail_out("Unknown change record $rec->{op}");
-		}
-	}
-	undef @cc;
+sub unescape {
+    my ($n) = @_;
 
-	if (defined($opt_e) && $opt_e eq $hash) {
-		reconstruct();
-		exit 0;
-	}
+    $n =~ s/\001/"/g;
+    $n =~ s/\\t/\t/g;
+    $n =~ s/\\n/\n/g;
+    $n =~ s/\\"/\"/g;
+    $n =~ s/\\(\d{3})/chr(oct($1))/ge;
+    $n =~ s/\\\\/\\/g;
+    return $n;
 }
 
-# Push the old and new references to the change set
-sub
-push_to_cc
-{
-	print "op=$op $old $new\n" if ($debug_push_cc);
-	return if ($op eq 'del');
-	push(@cc, { op => 'set', path => $old, lines => $oref }) if ($oref != $nref && $op ne 'copy');
-	push(@cc, { op => 'set', path => $new, lines => $nref });
+sub line_details {
+    my ($l) = @_;
+
+    my $len = length($l);
+
+    my $string = 0;
+    while ($l =~ s/\"[^"]*\"//) {
+        $string++;
+    }
+    while ($l =~ s/\'[^']*\'//) {
+        $string++;
+    }
+
+    my $comment = (($l =~ s/\/\*.*//) || ($l =~ s/\#.*//) || ($l =~ s/\/\/.*//)) + 0;
+
+    while ($l =~ s/\t+/' ' x (length($&) * 8 - length($`) % 8)/e) {
+    }
+    $l =~ /^( *)/g;
+    my $startspace = length($1);
+
+    my $comma = () = $l =~ /\,/g;
+    my $bracket = () = $l =~ /\(/g;
+    my $access = () = $l =~ /\.[^0-9]|\-\>/g;
+    my $assignment = () = $l =~ /[^<>!~=]\=[^=]|\<\<\=|\>\>\=/g;
+    my $scope = () = $l =~ /\{|(:\s*$)/g;
+    my $array = () = $l =~ /\[/g;
+    my $logical = () = $l =~ /\=\=|[^>]\>\=|[^<]\<\=|\!\=|[^<]\<[^<]|[^->]\>[^>]|\!|\|\||\&\&|\bor\b|\band\b|\bnot\b|\bis\b/g;
+    return "$len $startspace $string $comment $comma $bracket $access $assignment $scope $array $logical";
 }
 
-# Return true if we are supposed to output details regarding the specified file
-# (if no -s option was passed or the file contains source code)
-sub
-output_source_code
-{
-	return 1 unless ($opt_s);
-	my ($name) = @_;
-	# Keep tokenize.pl:tokenize, lifetime.pl:output_source_code, repo-metrics-report.sh, analyze-moves.sh in sync
-	return ($name =~ m/\.(C|c|cc|cpp|cs|cxx|hh|hpp|h\+\+|c\+\+|h|H|hxx|java|((php[3457s]?)|pht|php-s)|py)$/);
+sub str_equal {
+    my($a, $b) = @_;
 
-
-}
-
-# Change escaped quotes into \001 so that the real ones can be used as delimiters
-sub
-hide_escaped_quotes
-{
-	s/([^\\])\\\"/$1\001/g;
-}
-
-
-# Fix filename with embedded quotes and escapes
-sub
-unquote_unescape
-{
-	my ($n) = @_;
-	return $n unless (/\"/);
-
-	$n =~ s/([^\\])\\\"/$1\001/g;
-	$n =~ s/\"//g;
-	return unescape($n);
-}
-
-
-# Remove escapes and escaped quotes from the passed file name
-sub
-unescape
-{
-	my ($n) = @_;
-
-	$n =~ s/\001/"/g;
-	$n =~ s/\\t/\t/g;
-	$n =~ s/\\n/\n/g;
-	$n =~ s/\\"/\"/g;
-	$n =~ s/\\(\d{3})/chr(oct($1))/ge;
-	$n =~ s/\\\\/\\/g;	# Must be last
-	return $n;
-}
-
-# Return details about the line's composition
-# The values returned appear in the end of this function
-sub
-line_details
-{
-	my ($l) = @_;
-
-	my $len = length($l);
-
-	# Count and remove strings
-	my $string = 0;
-	while ($l =~ s/\"[^"]*\"//) {
-		$string++;
-	}
-	while ($l =~ s/\'[^']*\'//) {
-		$string++;
-	}
-
-	# Remove comments
-	my $comment = (($l =~ s/\/\*.*//) || ($l =~ s/\#.*//) || ($l =~ s/\/\/.*//)) + 0;
-
-	# Spaces (and expanded tabs) at the beginning of the line
-	while ($l =~ s/\t+/' ' x (length($&) * 8 - length($`) % 8)/e) {
-	    # spin in empty loop until substitution finally fails
-	}
-	$l =~ /^( *)/g;
-	my $startspace = length($1);
-
-	my $comma = () = $l =~ /\,/g;
-	my $bracket = () = $l =~ /\(/g;
-	my $access = () = $l =~ /\.[^0-9]|\-\>/g;
-	my $assignment = () = $l =~ /[^<>!~=]\=[^=]|\<\<\=|\>\>\=/g;
-	my $scope = () = $l =~ /\{|(:\s*$)/g;
-	# String (done earlier)
-	# Structure member access (combined with access)
-	# * can be pointer dereference or multiplication; ignore
-	# "if" ignore
-	my $array = () = $l =~ /\[/g;
-	# Comments (done earlier)
-	my $logical = () = $l =~ /\=\=|[^>]\>\=|[^<]\<\=|\!\=|[^<]\<[^<]|[^->]\>[^>]|\!|\|\||\&\&|\bor\b|\band\b|\bnot\b|\bis\b/g;
-	return "$len $startspace $string $comment $comma $bracket $access $assignment $scope $array $logical";
-}
-
-sub
-str_equal
-{
-	my($a, $b) = @_;
-
-	if ($a ne $b) {
-		print STDERR "Expected\t[$a]\nObtained\t[$b]\n";
-	}
+    if ($a ne $b) {
+        print STDERR "Expected\t[$a]\nObtained\t[$b]\n";
+    }
 }
 
 sub output_line_modifications {
     for my $key (sort keys %line_modifications) {
-        my ($file, $line) = split(/:/, $key);
-        my $count = $line_modifications{$key}{count};
-        my $content = $line_modifications{$key}{content};
-		$csv->say($fh, [$file, $line, $count, $content]);
-        print "File: $file, Line: $line, Modifications: $count, Last Content: $content\n";
+        my ($file, $line_id) = split(/:/, $key);
+        my $data = $line_modifications{$key};
+        my $count = $data->{count};
+        my $content = $data->{content};
+        my $status = $data->{deleted} ? 'Deleted' : 'Active';
+        $csv->say($fh, [$file, $count, $status, $content]);
+        print "File: $file, Modifications: $count, Status: $status, Content: $content\n";
     }
 }
 
-
-sub
-test_line_details
-{
+sub test_line_details {
 		 # l s s c c b a a s a l
 	str_equal("2 0 0 0 0 0 0 0 0 0 0", line_details("xx"));
 	str_equal("3 0 1 0 0 0 0 0 0 0 0", line_details("'x'"));
