@@ -1,0 +1,7 @@
+diff --git a/file_add.txt b/file_add.txt
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/file_add.txt
+@@ -0,0 +1 @@
++This is a newly added line.

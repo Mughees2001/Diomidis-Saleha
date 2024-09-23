@@ -1,0 +1,7 @@
+diff --git a/file_delete.txt b/file_delete.txt
+deleted file mode 100644
+index e69de29..0000000
+--- a/file_delete.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-This line will be deleted.

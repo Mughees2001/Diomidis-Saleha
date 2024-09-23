@@ -1,0 +1,10 @@
+diff --git a/file_multi.txt b/file_multi.txt
+index e69de29..d95f3ad 100644
+--- a/file_multi.txt
++++ b/file_multi.txt
+@@ -1 +1 @@
+-First old line.
++First modified line.
+@@ -3 +3 @@
+-Second old line.
++Second modified line.

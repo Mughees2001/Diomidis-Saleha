@@ -1,0 +1,7 @@
+diff --git a/file_modify.txt b/file_modify.txt
+index e69de29..d95f3ad 100644
+--- a/file_modify.txt
++++ b/file_modify.txt
+@@ -1 +1 @@
+-Old content line.
++New content line.

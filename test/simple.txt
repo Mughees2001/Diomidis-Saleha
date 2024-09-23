@@ -1,4 +1,0 @@
-a1 count=1 
-b2 count=2
-c1 count=1
-d2 count=2
