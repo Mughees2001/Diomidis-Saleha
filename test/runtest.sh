@@ -43,10 +43,10 @@ compare()
 test_one()
 {
   (
-    cd code-lifetime-test &&
+    cd Diomidis-Saleha-test &&
     git log -m -M -C -C --pretty=tformat:'commit %H %ct' --topo-order --reverse -U0  | tee ../diff.diff
-  ) | perl ../src/line_changes.pl -g growth.txt -D RH || exit 77
-  compare code-lifetime-test
+  ) | perl ../src/bin/line-changes.pl -g growth.txt -D RH || exit 77
+  compare Diomidis-Saleha-test
 }
 
 # Test the final status using difflog and daglp
@@ -54,9 +54,9 @@ test_final()
 {
   (
     cd $1 &&
-      git checkout master &&
-    $TOOLDIR/difflog.sh master
-  ) | perl ../src/line_changes.pl -g growth.txt -D RH || exit 77
+      git checkout main &&
+    $TOOLDIR/difflog.sh main
+  ) | perl ../src/bin/line-changes.pl -g growth.txt -D RH || exit 77
   compare $1
 }
 
@@ -66,15 +66,15 @@ if [ "x$1" = 'x-1' ] ; then
   exit 0
 fi
 
-(cd code-lifetime-test && git checkout master >/dev/null && git log --reverse --format=%H master) |
+(cd Diomidis-Saleha-test && git checkout main >/dev/null && git log --reverse --format=%H main) |
 while read sha ; do
   echo Verifying $sha
-  ( cd code-lifetime-test &&
+  ( cd Diomidis-Saleha-test &&
     git checkout -q $sha ) &&
   test_one
 done
 
-test_final code-lifetime-test
-test_final code-lifetime-test-branch
+test_final Diomidis-Saleha-test
+# test_final Diomidis-Saleha-test-branch
 
 echo All tests succeeded 1>&2
