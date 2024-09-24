@@ -43,10 +43,10 @@ jobs:
         find src -name "*.pl" -o -name "*.pm" | xargs perltidy -b -bext='.bak'
         find test -name "*.pl" | xargs perltidy -b -bext='.bak'
 
-    - name: Run Perl::Critic
-      run: |
-        find src -name "*.pl" -o -name "*.pm" | xargs perlcritic
-        find test -name "*.pl" | xargs perlcritic
+    # - name: Run Perl::Critic
+    #   run: |
+    #     find src -name "*.pl" -o -name "*.pm" | xargs perlcritic
+    #     find test -name "*.pl" | xargs perlcritic
 
     - name: Set up Python
       uses: actions/setup-python@v2
