@@ -20,3 +20,4 @@ on 'test' => sub {
 on 'develop' => sub {
     requires 'Test::Strict';
 };
+
