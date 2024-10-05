@@ -54,12 +54,15 @@ jobs:
         python-version: '3.8'
 
      #     Add dependencies here
+     #mail mergo
     - name: Install Python Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install mypy
         pip install numpy
         pip install pandas
+      
+    
   
 
 
