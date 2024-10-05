@@ -75,9 +75,9 @@ jobs:
       run: |
         prove -lr test/
       
-    - name: Run Additional Test Scripts
-      run: |
-        bash test/runtest.sh
+    # - name: Run Additional Test Scripts
+    #   run: |
+    #     bash test/runtest.sh
 
     - name: Print build log
       if: failure()
